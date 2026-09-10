@@ -1,0 +1,46 @@
+name: Run limbo patch helper
+
+on:
+  push:
+    branches:
+      - fix/limbo-auth-modern
+    paths:
+      - .github/workflows/run-limbo-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/limbo-auth-modern
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Apply patch helper
+        run: python tools/apply_limbo_patch.py
+
+      - name: Format
+        run: cargo fmt --all
+
+      - name: Check touched Rust crates
+        run: cargo check -p infrarust-core -p infrarust-plugin-auth
+
+      - name: Commit source fixes
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/infrarust-core/src/limbo/spawn.rs \
+                  plugins/infrarust-plugin-auth/src/handler.rs \
+                  tools/registry-extractor/extract-all.sh
+          git diff --cached --stat
+          git commit -m "fix(limbo): improve auth reminders and modern spawn readiness"
+          git push origin HEAD:fix/limbo-auth-modern
