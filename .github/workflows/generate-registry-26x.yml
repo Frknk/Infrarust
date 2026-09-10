@@ -17,6 +17,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: fix/limbo-auth-modern
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -93,4 +95,6 @@ jobs:
           git add data/registry/v775.bin data/registry/v776.bin
           git diff --cached --stat
           git commit -m "fix(limbo): bundle registry data for Minecraft 26.1 and 26.2"
+          git fetch origin fix/limbo-auth-modern
+          git rebase origin/fix/limbo-auth-modern
           git push origin HEAD:fix/limbo-auth-modern
