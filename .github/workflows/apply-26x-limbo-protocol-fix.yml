@@ -38,8 +38,6 @@ jobs:
                   raise SystemExit(f"{path}: expected at least {count} occurrence(s), found {found}: {old!r}")
               p.write_text(text.replace(old, new, count))
 
-          # Minecraft 26.2 adds onlineMode immediately before enforcesSecureChat
-          # in the play ClientboundLoginPacket.
           path = "crates/infrarust_protocol/src/packets/play/join_game.rs"
           replace_exact(path,
               "    pub sea_level: i32,\n    pub enforces_secure_chat: bool,",
@@ -68,7 +66,6 @@ jobs:
               raise SystemExit("join_game.rs: test insertion marker missing")
           p.write_text(text.replace(marker, test + marker, 1))
 
-          # 26.x packet IDs and the new per-section fluid count.
           path = "crates/infrarust_protocol/src/packets/play/chunk_data.rs"
           replace_exact(path,
               "        V1_21_9 => 0x2C,\n    ];",
@@ -102,7 +99,6 @@ jobs:
           ]:
               replace_exact(path, old, new)
 
-          # Preserve the actual authentication mode in the 26.2 limbo Login packet.
           path = "crates/infrarust-core/src/limbo/handler_chain.rs"
           replace_exact(path,
               "                    if let Err(e) =\n                        send_spawn_sequence(client, version, registry, needs_join_game).await\n                    {",
@@ -132,9 +128,23 @@ jobs:
           cargo fmt
 
       - name: Test protocol and limbo crates
+        shell: bash
         run: |
-          cargo test -p infrarust_protocol -p infrarust-core
-          cargo check -p infrarust-plugin-auth
+          set +e
+          {
+            cargo test -p infrarust_protocol -p infrarust-core
+            cargo check -p infrarust-plugin-auth
+          } 2>&1 | tee /tmp/26x-patch-test.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            cp /tmp/26x-patch-test.log .github/26x-patch-failure.log
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .github/26x-patch-failure.log
+            git commit -m "ci: capture 26.x patch test failure"
+            git push origin HEAD:fix/limbo-auth-modern
+            exit "$status"
+          fi
 
       - name: Commit patch
         shell: bash
