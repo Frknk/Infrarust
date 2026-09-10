@@ -24,6 +24,7 @@ pub struct CJoinGame {
     pub dimension: i32,
     pub portal_cooldown: i32,
     pub sea_level: i32,
+    pub online_mode: bool,
     pub enforces_secure_chat: bool,
     pub death_dimension: Option<String>,
     pub death_position: Option<i64>,
@@ -52,6 +53,7 @@ impl Default for CJoinGame {
             dimension: 0,
             portal_cooldown: 0,
             sea_level: 63,
+            online_mode: false,
             enforces_secure_chat: false,
             death_dimension: None,
             death_position: None,
@@ -154,6 +156,12 @@ fn decode_1_20_2_up(
     let (death_dimension, death_position) = super::common::decode_death_location(r)?;
     let (portal_cooldown, sea_level) = super::common::decode_world_info(r, version)?;
 
+    let online_mode = if version.no_less_than(ProtocolVersion::V26_2) {
+        r.read_bool()?
+    } else {
+        false
+    };
+
     let enforces_secure_chat = if version.no_less_than(ProtocolVersion::V1_20_5) {
         r.read_bool()?
     } else {
@@ -179,6 +187,7 @@ fn decode_1_20_2_up(
         dimension,
         portal_cooldown,
         sea_level,
+        online_mode,
         enforces_secure_chat,
         death_dimension,
         death_position,
@@ -220,6 +229,10 @@ fn encode_1_20_2_up(
 
     super::common::encode_death_location(w, pkt.death_dimension.as_deref(), pkt.death_position)?;
     super::common::encode_world_info(w, pkt.portal_cooldown, pkt.sea_level, version)?;
+
+    if version.no_less_than(ProtocolVersion::V26_2) {
+        w.write_bool(pkt.online_mode)?;
+    }
 
     if version.no_less_than(ProtocolVersion::V1_20_5) {
         w.write_bool(pkt.enforces_secure_chat)?;
@@ -263,6 +276,7 @@ mod tests {
             dimension: 0,
             portal_cooldown: 20,
             sea_level: 63,
+            online_mode: false,
             enforces_secure_chat: true,
             death_dimension: None,
             death_position: None,
@@ -309,6 +323,7 @@ mod tests {
             dimension: 0,
             portal_cooldown: 20,
             sea_level: 63,
+            online_mode: false,
             enforces_secure_chat: true,
             death_dimension: None,
             death_position: None,
@@ -329,6 +344,23 @@ mod tests {
         assert_eq!(decoded.portal_cooldown, 20);
         assert!(!decoded.enforces_secure_chat);
         assert!(decoded.raw_payload.is_none());
+    }
+
+    #[test]
+    fn test_join_game_online_mode_v26_2() {
+        let pkt = CJoinGame {
+            online_mode: true,
+            enforces_secure_chat: true,
+            ..Default::default()
+        };
+
+        let decoded = round_trip_version(&pkt, ProtocolVersion::V26_2);
+        assert!(decoded.online_mode);
+        assert!(decoded.enforces_secure_chat);
+
+        let pre_26_2 = round_trip_version(&pkt, ProtocolVersion::V26_1);
+        assert!(!pre_26_2.online_mode);
+        assert!(pre_26_2.enforces_secure_chat);
     }
 
     #[test]

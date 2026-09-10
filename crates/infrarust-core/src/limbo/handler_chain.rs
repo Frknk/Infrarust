@@ -62,8 +62,14 @@ pub(crate) async fn run_handler_chain(
             HandlerAction::Exit(chain_result) => return chain_result,
             HandlerAction::Hold(timeout) => {
                 if !spawn_sent {
-                    if let Err(e) =
-                        send_spawn_sequence(client, version, registry, needs_join_game).await
+                    if let Err(e) = send_spawn_sequence(
+                        client,
+                        version,
+                        registry,
+                        needs_join_game,
+                        core.profile.is_mojang_authenticated(),
+                    )
+                    .await
                     {
                         tracing::warn!(error = %e, "failed to send limbo spawn sequence");
                         return LimboChainResult::Kick(Component::text("Internal error"));

@@ -37,6 +37,7 @@ impl Packet for CChunkData {
         V1_21_2 => 0x28,
         V1_21_5 => 0x27,
         V1_21_9 => 0x2C,
+        V26_1   => 0x2D,
     ];
 
     fn decode(_r: &mut &[u8], _version: ProtocolVersion) -> ProtocolResult<Self> {
@@ -122,6 +123,9 @@ fn encode_empty_section(w: &mut impl Write, version: ProtocolVersion) -> Protoco
     let needs_data_length = version.less_than(ProtocolVersion::V1_21_5);
 
     w.write_i16_be(0)?;
+    if version.no_less_than(ProtocolVersion::V26_1) {
+        w.write_i16_be(0)?; // fluid count, added in 26.x
+    }
     w.write_u8(0)?;
     w.write_var_int(&VarInt(0))?;
     if needs_data_length {
@@ -261,6 +265,17 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_section_26_x_has_fluid_count() {
+        let mut buf = Vec::new();
+        encode_empty_section(&mut buf, ProtocolVersion::V26_1).unwrap();
+        assert_eq!(
+            buf.len(),
+            8,
+            "26.x: block count + fluid count + two empty palettes"
+        );
+    }
+
+    #[test]
     fn test_empty_chunk_16_sections_end() {
         let data = encode_empty_chunk_sections(16, ProtocolVersion::V1_21).unwrap();
         assert_eq!(data.len(), 16 * 8, "16 sections * 8 bytes = 128");
@@ -342,6 +357,12 @@ mod tests {
         assert_eq!(&payload[4..8], &0_i32.to_be_bytes());
         assert_eq!(payload[8], 1, "ground_up_continuous");
         assert!(payload.len() > 17, "header plus compressed data");
+    }
+
+    #[test]
+    fn test_chunk_packet_id_26_x() {
+        assert_eq!(packet_id(ProtocolVersion::V26_1), 0x2D);
+        assert_eq!(packet_id(ProtocolVersion::V26_2), 0x2D);
     }
 
     #[test]

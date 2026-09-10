@@ -32,6 +32,7 @@ impl Packet for CSetCenterChunk {
         V1_21_2 => 0x58,
         V1_21_5 => 0x57,
         V1_21_9 => 0x5C,
+        V26_1   => 0x5E,
     ];
 
     fn decode(r: &mut &[u8], _version: ProtocolVersion) -> ProtocolResult<Self> {

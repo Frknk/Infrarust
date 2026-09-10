@@ -36,12 +36,13 @@ pub(crate) async fn send_spawn_sequence(
     version: ProtocolVersion,
     registry: &PacketRegistry,
     needs_join_game: bool,
+    online_mode: bool,
 ) -> Result<(), CoreError> {
     let is_modern = version.no_less_than(ProtocolVersion::V1_20_2);
     let is_pre_1_16 = version.less_than(ProtocolVersion::V1_16);
 
     if is_modern && needs_join_game {
-        send_modern_with_join(client, version, registry).await?;
+        send_modern_with_join(client, version, registry, online_mode).await?;
     } else if is_modern {
         send_modern_switch(client, version, registry).await?;
     } else if is_pre_1_16 && needs_join_game {
@@ -68,8 +69,9 @@ async fn send_modern_with_join(
     client: &mut ClientBridge,
     version: ProtocolVersion,
     registry: &PacketRegistry,
+    online_mode: bool,
 ) -> Result<(), CoreError> {
-    send_join_game(client, version, registry).await?;
+    send_join_game_with_online_mode(client, version, registry, online_mode).await?;
     send_spawn_position(client, version, registry).await?;
     send_modern_chunk_setup(client, version, registry).await?;
     send_player_position(client, version, registry).await
@@ -153,7 +155,16 @@ async fn send_join_game(
     version: ProtocolVersion,
     registry: &PacketRegistry,
 ) -> Result<(), CoreError> {
-    let join = build_limbo_join_game(version)?;
+    send_join_game_with_online_mode(client, version, registry, false).await
+}
+
+async fn send_join_game_with_online_mode(
+    client: &mut ClientBridge,
+    version: ProtocolVersion,
+    registry: &PacketRegistry,
+    online_mode: bool,
+) -> Result<(), CoreError> {
+    let join = build_limbo_join_game_with_online_mode(version, online_mode)?;
     let frame = encode_packet(&join, version, registry)?;
     client.write_frame(&frame).await
 }
@@ -277,6 +288,13 @@ fn limbo_player_position(version: ProtocolVersion) -> CSynchronizePlayerPosition
 }
 
 fn build_limbo_join_game(version: ProtocolVersion) -> Result<CJoinGame, CoreError> {
+    build_limbo_join_game_with_online_mode(version, false)
+}
+
+fn build_limbo_join_game_with_online_mode(
+    version: ProtocolVersion,
+    online_mode: bool,
+) -> Result<CJoinGame, CoreError> {
     if version.less_than(ProtocolVersion::V1_16) {
         let raw_payload = build_pre_1_16_join_game_payload(version)?;
         return Ok(CJoinGame {
@@ -314,6 +332,7 @@ fn build_limbo_join_game(version: ProtocolVersion) -> Result<CJoinGame, CoreErro
         dimension: LIMBO_DIMENSION_ID,
         portal_cooldown: 0,
         sea_level: 0, // End has no sea
+        online_mode,
         enforces_secure_chat: false,
         death_dimension: None,
         death_position: None,
