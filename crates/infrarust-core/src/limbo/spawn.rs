@@ -313,8 +313,14 @@ fn build_limbo_join_game_with_online_mode(
         });
     }
 
+    let entity_id = if version.no_less_than(ProtocolVersion::V26_2) {
+        1
+    } else {
+        0
+    };
+
     Ok(CJoinGame {
-        entity_id: 0,
+        entity_id,
         is_hardcore: false,
         gamemode: 2, // adventure
         previous_gamemode: -1,
@@ -651,6 +657,15 @@ mod tests {
             );
             assert!(result.unwrap().raw_payload.is_none());
         }
+    }
+
+    #[test]
+    fn test_limbo_entity_id_26_2_boundary() {
+        let pre = build_limbo_join_game(ProtocolVersion::V26_1).unwrap();
+        assert_eq!(pre.entity_id, 0);
+
+        let current = build_limbo_join_game(ProtocolVersion::V26_2).unwrap();
+        assert_eq!(current.entity_id, 1);
     }
 
     #[test]
