@@ -1,0 +1,155 @@
+name: Apply 26.x limbo protocol fix
+
+on:
+  push:
+    branches:
+      - fix/limbo-auth-modern
+    paths:
+      - .github/workflows/apply-26x-limbo-protocol-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/limbo-auth-modern
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Apply protocol 775/776 fixes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_exact(path, old, new, count=1):
+              p = Path(path)
+              text = p.read_text()
+              found = text.count(old)
+              if found < count:
+                  raise SystemExit(f"{path}: expected at least {count} occurrence(s), found {found}: {old!r}")
+              p.write_text(text.replace(old, new, count))
+
+          # Minecraft 26.2 adds onlineMode immediately before enforcesSecureChat
+          # in the play ClientboundLoginPacket.
+          path = "crates/infrarust_protocol/src/packets/play/join_game.rs"
+          replace_exact(path,
+              "    pub sea_level: i32,\n    pub enforces_secure_chat: bool,",
+              "    pub sea_level: i32,\n    pub online_mode: bool,\n    pub enforces_secure_chat: bool,")
+          replace_exact(path,
+              "            sea_level: 63,\n            enforces_secure_chat: false,",
+              "            sea_level: 63,\n            online_mode: false,\n            enforces_secure_chat: false,")
+          replace_exact(path,
+              "    let (portal_cooldown, sea_level) = super::common::decode_world_info(r, version)?;\n\n    let enforces_secure_chat = if version.no_less_than(ProtocolVersion::V1_20_5) {",
+              "    let (portal_cooldown, sea_level) = super::common::decode_world_info(r, version)?;\n\n    let online_mode = if version.no_less_than(ProtocolVersion::V26_2) {\n        r.read_bool()?\n    } else {\n        false\n    };\n\n    let enforces_secure_chat = if version.no_less_than(ProtocolVersion::V1_20_5) {")
+          replace_exact(path,
+              "        sea_level,\n        enforces_secure_chat,",
+              "        sea_level,\n        online_mode,\n        enforces_secure_chat,")
+          replace_exact(path,
+              "    super::common::encode_world_info(w, pkt.portal_cooldown, pkt.sea_level, version)?;\n\n    if version.no_less_than(ProtocolVersion::V1_20_5) {",
+              "    super::common::encode_world_info(w, pkt.portal_cooldown, pkt.sea_level, version)?;\n\n    if version.no_less_than(ProtocolVersion::V26_2) {\n        w.write_bool(pkt.online_mode)?;\n    }\n\n    if version.no_less_than(ProtocolVersion::V1_20_5) {")
+
+          p = Path(path)
+          text = p.read_text().replace(
+              "            sea_level: 63,\n            enforces_secure_chat: true,",
+              "            sea_level: 63,\n            online_mode: false,\n            enforces_secure_chat: true,"
+          )
+          marker = "    #[test]\n    fn test_join_game_entity_id_preserved() {"
+          test = '''    #[test]\n    fn test_join_game_online_mode_v26_2() {\n        let pkt = CJoinGame {\n            online_mode: true,\n            enforces_secure_chat: true,\n            ..Default::default()\n        };\n\n        let decoded = round_trip_version(&pkt, ProtocolVersion::V26_2);\n        assert!(decoded.online_mode);\n        assert!(decoded.enforces_secure_chat);\n\n        let pre_26_2 = round_trip_version(&pkt, ProtocolVersion::V26_1);\n        assert!(!pre_26_2.online_mode);\n        assert!(pre_26_2.enforces_secure_chat);\n    }\n\n'''
+          if marker not in text:
+              raise SystemExit("join_game.rs: test insertion marker missing")
+          p.write_text(text.replace(marker, test + marker, 1))
+
+          # 26.x packet IDs and the new per-section fluid count.
+          path = "crates/infrarust_protocol/src/packets/play/chunk_data.rs"
+          replace_exact(path,
+              "        V1_21_9 => 0x2C,\n    ];",
+              "        V1_21_9 => 0x2C,\n        V26_1   => 0x2D,\n    ];")
+          replace_exact(path,
+              "    w.write_i16_be(0)?;\n    w.write_u8(0)?;",
+              "    w.write_i16_be(0)?;\n    if version.no_less_than(ProtocolVersion::V26_1) {\n        w.write_i16_be(0)?; // fluid count, added in 26.x\n    }\n    w.write_u8(0)?;")
+          p = Path(path)
+          text = p.read_text()
+          marker = "    #[test]\n    fn test_empty_chunk_16_sections_end() {"
+          test = '''    #[test]\n    fn test_empty_section_26_x_has_fluid_count() {\n        let mut buf = Vec::new();\n        encode_empty_section(&mut buf, ProtocolVersion::V26_1).unwrap();\n        assert_eq!(buf.len(), 8, "26.x: block count + fluid count + two empty palettes");\n    }\n\n'''
+          if marker not in text:
+              raise SystemExit("chunk_data.rs: test insertion marker missing")
+          text = text.replace(marker, test + marker, 1)
+          marker2 = "    fn test_chunk_packet_id_pre_1_14_versions() {"
+          if marker2 not in text:
+              raise SystemExit("chunk_data.rs: packet-id test marker missing")
+          text = text.replace(marker2, "    fn test_chunk_packet_id_26_x() {\n        assert_eq!(packet_id(ProtocolVersion::V26_1), 0x2D);\n        assert_eq!(packet_id(ProtocolVersion::V26_2), 0x2D);\n    }\n\n    #[test]\n" + marker2, 1)
+          p.write_text(text)
+
+          for path, old, new in [
+              ("crates/infrarust_protocol/src/packets/play/center_chunk.rs",
+               "        V1_21_9 => 0x5C,\n    ];",
+               "        V1_21_9 => 0x5C,\n        V26_1   => 0x5E,\n    ];"),
+              ("crates/infrarust_protocol/src/packets/play/player_position.rs",
+               "        V1_21_9 => 0x46,\n    ];",
+               "        V1_21_9 => 0x46,\n        V26_1   => 0x48,\n    ];"),
+              ("crates/infrarust_protocol/src/packets/play/spawn_position.rs",
+               "        V1_21_9 => 0x5F,\n    ];",
+               "        V1_21_9 => 0x5F,\n        V26_1   => 0x61,\n    ];"),
+          ]:
+              replace_exact(path, old, new)
+
+          # Preserve the actual authentication mode in the 26.2 limbo Login packet.
+          path = "crates/infrarust-core/src/limbo/handler_chain.rs"
+          replace_exact(path,
+              "                    if let Err(e) =\n                        send_spawn_sequence(client, version, registry, needs_join_game).await\n                    {",
+              "                    if let Err(e) = send_spawn_sequence(\n                        client,\n                        version,\n                        registry,\n                        needs_join_game,\n                        core.profile.is_mojang_authenticated(),\n                    )\n                    .await\n                    {")
+
+          path = "crates/infrarust-core/src/limbo/spawn.rs"
+          replace_exact(path,
+              "    registry: &PacketRegistry,\n    needs_join_game: bool,\n) -> Result<(), CoreError> {",
+              "    registry: &PacketRegistry,\n    needs_join_game: bool,\n    online_mode: bool,\n) -> Result<(), CoreError> {")
+          replace_exact(path,
+              "        send_modern_with_join(client, version, registry).await?;",
+              "        send_modern_with_join(client, version, registry, online_mode).await?;")
+          replace_exact(path,
+              "async fn send_modern_with_join(\n    client: &mut ClientBridge,\n    version: ProtocolVersion,\n    registry: &PacketRegistry,\n) -> Result<(), CoreError> {\n    send_join_game(client, version, registry).await?;",
+              "async fn send_modern_with_join(\n    client: &mut ClientBridge,\n    version: ProtocolVersion,\n    registry: &PacketRegistry,\n    online_mode: bool,\n) -> Result<(), CoreError> {\n    send_join_game_with_online_mode(client, version, registry, online_mode).await?;")
+          replace_exact(path,
+              "async fn send_join_game(\n    client: &mut ClientBridge,\n    version: ProtocolVersion,\n    registry: &PacketRegistry,\n) -> Result<(), CoreError> {\n    let join = build_limbo_join_game(version)?;\n    let frame = encode_packet(&join, version, registry)?;\n    client.write_frame(&frame).await\n}\n",
+              "async fn send_join_game(\n    client: &mut ClientBridge,\n    version: ProtocolVersion,\n    registry: &PacketRegistry,\n) -> Result<(), CoreError> {\n    send_join_game_with_online_mode(client, version, registry, false).await\n}\n\nasync fn send_join_game_with_online_mode(\n    client: &mut ClientBridge,\n    version: ProtocolVersion,\n    registry: &PacketRegistry,\n    online_mode: bool,\n) -> Result<(), CoreError> {\n    let join = build_limbo_join_game_with_online_mode(version, online_mode)?;\n    let frame = encode_packet(&join, version, registry)?;\n    client.write_frame(&frame).await\n}\n")
+          replace_exact(path,
+              "fn build_limbo_join_game(version: ProtocolVersion) -> Result<CJoinGame, CoreError> {",
+              "fn build_limbo_join_game(version: ProtocolVersion) -> Result<CJoinGame, CoreError> {\n    build_limbo_join_game_with_online_mode(version, false)\n}\n\nfn build_limbo_join_game_with_online_mode(\n    version: ProtocolVersion,\n    online_mode: bool,\n) -> Result<CJoinGame, CoreError> {")
+          replace_exact(path,
+              "        sea_level: 0, // End has no sea\n        enforces_secure_chat: false,",
+              "        sea_level: 0, // End has no sea\n        online_mode,\n        enforces_secure_chat: false,")
+          PY
+
+          cargo fmt
+
+      - name: Test protocol and limbo crates
+        run: |
+          cargo test -p infrarust_protocol -p infrarust-core
+          cargo check -p infrarust-plugin-auth
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            crates/infrarust_protocol/src/packets/play/join_game.rs \
+            crates/infrarust_protocol/src/packets/play/chunk_data.rs \
+            crates/infrarust_protocol/src/packets/play/center_chunk.rs \
+            crates/infrarust_protocol/src/packets/play/player_position.rs \
+            crates/infrarust_protocol/src/packets/play/spawn_position.rs \
+            crates/infrarust-core/src/limbo/handler_chain.rs \
+            crates/infrarust-core/src/limbo/spawn.rs
+          git diff --cached --stat
+          git commit -m "fix(limbo): support Minecraft 26.x play protocol"
+          git push origin HEAD:fix/limbo-auth-modern
