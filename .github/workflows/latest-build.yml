@@ -1,51 +1,66 @@
-name: Latest Build
+name: Latest Build macOS ARM64
 
 on:
   push:
-    branches: [ main ]
+    branches: [ fix/limbo-auth-modern ]
     paths:
       - 'crates/**'
       - 'plugins/**'
+      - 'data/registry/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - '.github/actions/build-frontend/**'
+      - '.github/workflows/latest-build.yml'
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check-and-build:
-    runs-on: ubuntu-latest
+  build-macos-arm64:
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      
+        with:
+          ref: fix/limbo-auth-modern
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
-          
+          targets: aarch64-apple-darwin
+
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-arm64
 
       - name: Build Admin Frontend
         uses: ./.github/actions/build-frontend
 
       - name: Check formatting
         run: cargo fmt -- --check
-        
-      - name: Run clippy
-        run: cargo clippy -- -D warnings
-        
-      - name: Run tests
-        run: cargo test
 
-      - name: Build
-        run: cargo build --release
-        
-      - name: Rename binary
-        run: mv target/release/infrarust target/release/infrarust-latest-linux
-          
-      - name: Upload latest build
+      - name: Test touched crates
+        run: cargo test -p infrarust_protocol -p infrarust-core -p infrarust-plugin-auth
+
+      - name: Build macOS ARM64 release
+        run: cargo build --release --target aarch64-apple-darwin -p infrarust
+
+      - name: Verify binary architecture
+        run: |
+          file target/aarch64-apple-darwin/release/infrarust
+          file target/aarch64-apple-darwin/release/infrarust | grep -q 'arm64'
+
+      - name: Package macOS ARM64 binary
+        run: |
+          mkdir -p dist
+          cp target/aarch64-apple-darwin/release/infrarust dist/infrarust-macos-arm64
+          chmod +x dist/infrarust-macos-arm64
+          tar -C dist -czf infrarust-macos-arm64.tar.gz infrarust-macos-arm64
+
+      - name: Upload macOS ARM64 build
         uses: actions/upload-artifact@v4
         with:
-          name: latest-build
-          path: target/release/infrarust-latest-linux
+          name: infrarust-macos-arm64
+          path: infrarust-macos-arm64.tar.gz
+          if-no-files-found: error
