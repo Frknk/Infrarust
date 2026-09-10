@@ -6,11 +6,11 @@ use std::time::Duration;
 
 use dashmap::DashMap;
 use infrarust_api::event::BoxFuture;
+use infrarust_api::limbo::handle::SessionHandle;
 use infrarust_api::limbo::handler::{HandlerResult, LimboHandler, SessionEndReason};
 use infrarust_api::limbo::session::LimboSession;
 use infrarust_api::services::player_registry::PlayerRegistry;
 use infrarust_api::types::{Component, PlayerId, TitleData};
-use tokio_util::sync::CancellationToken;
 
 use crate::account::{AuthAccount, DisplayName, PremiumInfo, Username};
 use crate::config::AuthConfig;
@@ -100,15 +100,14 @@ impl AuthHandler {
         );
     }
 
-    fn spawn_reminder_task(&self, player_id: PlayerId, cancel_token: CancellationToken) {
+    fn spawn_reminder_task(&self, session: SessionHandle) {
         let interval_secs = self.config.security.title_reminder_interval_seconds;
         if interval_secs == 0 {
             return;
         }
 
-        let player_registry = Arc::clone(&self.player_registry);
         let config = Arc::clone(&self.config);
-        let cancel = cancel_token.clone();
+        let cancel = session.cancellation_token();
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
@@ -116,18 +115,14 @@ impl AuthHandler {
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
-                        if let Some(player) = player_registry.get_player_by_id(player_id) {
-                            let title = TitleData::new(
-                                parse_colored(&config.messages.reminder_title),
-                                parse_colored(&config.messages.reminder_subtitle),
-                            )
-                            .fade_in(5)
-                            .stay(60)
-                            .fade_out(10);
-                            let _ = player.send_title(title);
-                        } else {
-                            break;
-                        }
+                        let title = TitleData::new(
+                            parse_colored(&config.messages.reminder_title),
+                            parse_colored(&config.messages.reminder_subtitle),
+                        )
+                        .fade_in(5)
+                        .stay(60)
+                        .fade_out(10);
+                        let _ = session.send_title(title);
                     }
                     () = cancel.cancelled() => { break; }
                 }
@@ -287,7 +282,7 @@ impl LimboHandler for AuthHandler {
             },
         );
 
-        self.spawn_reminder_task(player_id, session.cancellation_token());
+        self.spawn_reminder_task(session.handle());
 
         tracing::debug!(player_id = ?player_id, display_name, "Player entered auth limbo");
 

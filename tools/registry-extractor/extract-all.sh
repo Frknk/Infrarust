@@ -39,6 +39,8 @@ VERSIONS=(
   "1.21.7:772"
   "1.21.9:773"
   "1.21.11:774"
+  "26.1:775"
+  "26.2:776"
 )
 
 # ─── CLI flags ───────────────────────────────────────────────────────────────
@@ -110,6 +112,10 @@ wait_for_server() {
 
 start_server() {
   local mc_version="$1"
+  local docker_image="$DOCKER_IMAGE"
+  if [[ "$mc_version" == 26.* ]]; then
+    docker_image="itzg/minecraft-server:java25"
+  fi
 
   cleanup_container
 
@@ -126,7 +132,7 @@ start_server() {
     -e SPAWN_PROTECTION=0 \
     -e VIEW_DISTANCE=4 \
     -e MAX_TICK_TIME=-1 \
-    "$DOCKER_IMAGE" >/dev/null
+    "$docker_image" >/dev/null
 
   wait_for_server
 }

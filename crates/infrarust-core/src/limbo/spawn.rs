@@ -71,8 +71,8 @@ async fn send_modern_with_join(
 ) -> Result<(), CoreError> {
     send_join_game(client, version, registry).await?;
     send_spawn_position(client, version, registry).await?;
-    send_player_position(client, version, registry).await?;
-    send_modern_chunk_setup(client, version, registry).await
+    send_modern_chunk_setup(client, version, registry).await?;
+    send_player_position(client, version, registry).await
 }
 
 async fn send_modern_switch(
@@ -183,9 +183,19 @@ async fn send_chunk(
     version: ProtocolVersion,
     registry: &PacketRegistry,
 ) -> Result<(), CoreError> {
+    send_chunk_at(client, 0, 0, version, registry).await
+}
+
+async fn send_chunk_at(
+    client: &mut ClientBridge,
+    chunk_x: i32,
+    chunk_z: i32,
+    version: ProtocolVersion,
+    registry: &PacketRegistry,
+) -> Result<(), CoreError> {
     let chunk = CChunkData {
-        chunk_x: 0,
-        chunk_z: 0,
+        chunk_x,
+        chunk_z,
         num_sections: LIMBO_NUM_SECTIONS,
     };
     let frame = encode_packet(&chunk, version, registry)?;
@@ -232,9 +242,13 @@ async fn send_modern_chunk_setup(
     let frame = encode_packet(&CChunkBatchStart, version, registry)?;
     client.write_frame(&frame).await?;
 
-    send_chunk(client, version, registry).await?;
+    for chunk_x in -1..=1 {
+        for chunk_z in -1..=1 {
+            send_chunk_at(client, chunk_x, chunk_z, version, registry).await?;
+        }
+    }
 
-    let batch_done = CChunkBatchFinished { batch_size: 1 };
+    let batch_done = CChunkBatchFinished { batch_size: 9 };
     let frame = encode_packet(&batch_done, version, registry)?;
     client.write_frame(&frame).await
 }
