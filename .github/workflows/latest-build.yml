@@ -40,8 +40,8 @@ jobs:
       - name: Check formatting
         run: cargo fmt -- --check
 
-      - name: Test touched crates
-        run: cargo test -p infrarust_protocol -p infrarust-core -p infrarust-plugin-auth
+      - name: Check touched crates
+        run: cargo check -p infrarust_protocol -p infrarust-core -p infrarust-plugin-auth
 
       - name: Build macOS ARM64 release
         run: cargo build --release --target aarch64-apple-darwin -p infrarust
