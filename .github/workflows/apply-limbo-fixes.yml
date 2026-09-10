@@ -1,0 +1,238 @@
+name: Apply limbo source fixes
+
+on:
+  push:
+    branches:
+      - fix/limbo-auth-modern
+    paths:
+      - .github/workflows/apply-limbo-fixes.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/limbo-auth-modern
+
+      - name: Apply targeted source fixes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_exact(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f"expected text not found in {path}:\n{old}")
+              p.write_text(text.replace(old, new, 1))
+
+          # Auth title reminders must stay on the limbo session channel.
+          path = "plugins/infrarust-plugin-auth/src/handler.rs"
+          replace_exact(
+              path,
+              "use infrarust_api::limbo::handler::{HandlerResult, LimboHandler, SessionEndReason};\nuse infrarust_api::limbo::session::LimboSession;",
+              "use infrarust_api::limbo::handle::SessionHandle;\nuse infrarust_api::limbo::handler::{HandlerResult, LimboHandler, SessionEndReason};\nuse infrarust_api::limbo::session::LimboSession;",
+          )
+          replace_exact(path, "use tokio_util::sync::CancellationToken;\n", "")
+          replace_exact(
+              path,
+              '''    fn spawn_reminder_task(&self, player_id: PlayerId, cancel_token: CancellationToken) {
+                  let interval_secs = self.config.security.title_reminder_interval_seconds;
+                  if interval_secs == 0 {
+                      return;
+                  }
+
+                  let player_registry = Arc::clone(&self.player_registry);
+                  let config = Arc::clone(&self.config);
+                  let cancel = cancel_token.clone();
+
+                  tokio::spawn(async move {
+                      let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+                      interval.tick().await;
+                      loop {
+                          tokio::select! {
+                              _ = interval.tick() => {
+                                  if let Some(player) = player_registry.get_player_by_id(player_id) {
+                                      let title = TitleData::new(
+                                          parse_colored(&config.messages.reminder_title),
+                                          parse_colored(&config.messages.reminder_subtitle),
+                                      )
+                                      .fade_in(5)
+                                      .stay(60)
+                                      .fade_out(10);
+                                      let _ = player.send_title(title);
+                                  } else {
+                                      break;
+                                  }
+                              }
+                              () = cancel.cancelled() => { break; }
+                          }
+                      }
+                  });
+              }
+''',
+              '''    fn spawn_reminder_task(&self, session: SessionHandle) {
+                  let interval_secs = self.config.security.title_reminder_interval_seconds;
+                  if interval_secs == 0 {
+                      return;
+                  }
+
+                  let config = Arc::clone(&self.config);
+                  let cancel = session.cancellation_token();
+
+                  tokio::spawn(async move {
+                      let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+                      interval.tick().await;
+                      loop {
+                          tokio::select! {
+                              _ = interval.tick() => {
+                                  let title = TitleData::new(
+                                      parse_colored(&config.messages.reminder_title),
+                                      parse_colored(&config.messages.reminder_subtitle),
+                                  )
+                                  .fade_in(5)
+                                  .stay(60)
+                                  .fade_out(10);
+                                  let _ = session.send_title(title);
+                              }
+                              () = cancel.cancelled() => { break; }
+                          }
+                      }
+                  });
+              }
+''',
+          )
+          replace_exact(
+              path,
+              "        self.spawn_reminder_task(player_id, session.cancellation_token());",
+              "        self.spawn_reminder_task(session.handle());",
+          )
+
+          # Modern clients should receive their initial chunks before position sync,
+          # and enough surrounding chunks to satisfy initial world readiness.
+          path = "crates/infrarust-core/src/limbo/spawn.rs"
+          replace_exact(
+              path,
+              '''    send_join_game(client, version, registry).await?;
+                  send_spawn_position(client, version, registry).await?;
+                  send_player_position(client, version, registry).await?;
+                  send_modern_chunk_setup(client, version, registry).await
+''',
+              '''    send_join_game(client, version, registry).await?;
+                  send_spawn_position(client, version, registry).await?;
+                  send_modern_chunk_setup(client, version, registry).await?;
+                  send_player_position(client, version, registry).await
+''',
+          )
+          replace_exact(
+              path,
+              '''async fn send_chunk(
+                  client: &mut ClientBridge,
+                  version: ProtocolVersion,
+                  registry: &PacketRegistry,
+              ) -> Result<(), CoreError> {
+                  let chunk = CChunkData {
+                      chunk_x: 0,
+                      chunk_z: 0,
+                      num_sections: LIMBO_NUM_SECTIONS,
+                  };
+                  let frame = encode_packet(&chunk, version, registry)?;
+                  client.write_frame(&frame).await
+              }
+''',
+              '''async fn send_chunk(
+                  client: &mut ClientBridge,
+                  version: ProtocolVersion,
+                  registry: &PacketRegistry,
+              ) -> Result<(), CoreError> {
+                  send_chunk_at(client, 0, 0, version, registry).await
+              }
+
+              async fn send_chunk_at(
+                  client: &mut ClientBridge,
+                  chunk_x: i32,
+                  chunk_z: i32,
+                  version: ProtocolVersion,
+                  registry: &PacketRegistry,
+              ) -> Result<(), CoreError> {
+                  let chunk = CChunkData {
+                      chunk_x,
+                      chunk_z,
+                      num_sections: LIMBO_NUM_SECTIONS,
+                  };
+                  let frame = encode_packet(&chunk, version, registry)?;
+                  client.write_frame(&frame).await
+              }
+''',
+          )
+          replace_exact(
+              path,
+              '''    send_chunk(client, version, registry).await?;
+
+                  let batch_done = CChunkBatchFinished { batch_size: 1 };
+''',
+              '''    for chunk_x in -1..=1 {
+                      for chunk_z in -1..=1 {
+                          send_chunk_at(client, chunk_x, chunk_z, version, registry).await?;
+                      }
+                  }
+
+                  let batch_done = CChunkBatchFinished { batch_size: 9 };
+''',
+          )
+
+          # Keep the registry extraction tooling current for Minecraft 26.x.
+          path = "tools/registry-extractor/extract-all.sh"
+          replace_exact(
+              path,
+              '''  "1.21.9:773"
+                "1.21.11:774"
+              )''',
+              '''  "1.21.9:773"
+                "1.21.11:774"
+                "26.1:775"
+                "26.2:776"
+              )''',
+          )
+          replace_exact(
+              path,
+              '''start_server() {
+                local mc_version="$1"
+
+                cleanup_container
+''',
+              '''start_server() {
+                local mc_version="$1"
+                local docker_image="$DOCKER_IMAGE"
+                if [[ "$mc_version" == 26.* ]]; then
+                  docker_image="itzg/minecraft-server:java25"
+                fi
+
+                cleanup_container
+''',
+          )
+          replace_exact(path, '    "$DOCKER_IMAGE" >/dev/null', '    "$docker_image" >/dev/null')
+
+      - name: Format and check
+        run: |
+          cargo fmt --all -- --check || cargo fmt --all
+          cargo check -p infrarust-core -p infrarust-plugin-auth
+
+      - name: Commit source fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/infrarust-core/src/limbo/spawn.rs \
+                  plugins/infrarust-plugin-auth/src/handler.rs \
+                  tools/registry-extractor/extract-all.sh
+          git diff --cached --stat
+          git commit -m "fix(limbo): improve auth reminders and modern spawn readiness"
+          git push origin HEAD:fix/limbo-auth-modern
